@@ -20,7 +20,7 @@
 #define DEBOUNCETIMEBUTTON 300
 #define MAXVSET           6000
 #define MAXASET           1200
-#define MINVSET           1330
+#define MINVSET           1300
 #define MINASET           0
 
 U8G2_ST7565_NHD_C12864_F_4W_HW_SPI u8g2(U8G2_R2, /* cs=*/ PA8, /* dc=*/ PA10, /* reset=*/ PA9);
@@ -43,6 +43,7 @@ int vBat;
 bool power_on = false;
 bool is_low_power_mode = false;
 uint16_t refresh_rate_ms = REFRESHRATEMS;
+const char* message;
 
 
 const char* getTimeStr() {
@@ -98,6 +99,12 @@ void blink(){
 void generate_pwm(){
   analogWrite(CURRENT_PWM, mAset*53.7);
   analogWrite(VOLTAGE_PWM, (mVset-1250)*13.27);
+}
+
+void power_off(){
+  analogWrite(CURRENT_PWM, 0);
+  analogWrite(VOLTAGE_PWM, 0);
+  power_on = false;
 }
 
 void idle(uint32_t ms = 1){
@@ -217,14 +224,18 @@ void drawscreen(){
   
   u8g2.drawStr(0, 8, buffer); //SET
   u8g2.setFont(u8g2_font_5x8_mr );
-  u8g2.drawStr(72, 64, getTimeStr());
-  snprintf(buffer, sizeof(buffer), "idle:%02d%%", get_free_cpu());
-  u8g2.drawStr(72, 56, buffer);
-  snprintf(buffer, sizeof(buffer), "vBat:%d.%02dV", vBat/100, vBat%100);
-  u8g2.drawStr(72, 48, buffer);
+  snprintf(buffer, sizeof(buffer), "%s %02d%%", getTimeStr(), get_free_cpu());
+  u8g2.drawStr(72, 64, buffer);
+  //snprintf(buffer, sizeof(buffer), "idle:%02d%%", get_free_cpu());
+  //u8g2.drawStr(72, 56, buffer);
   int power_loss = (((vBat*10)-mVrel)*mArel)/1E5;
-  snprintf(buffer, sizeof(buffer), "PL:%1d.%1dW", power_loss/10, power_loss%10);
-  u8g2.drawStr(72, 40, buffer);
+  snprintf(buffer, sizeof(buffer), "%d.%02dV %1d.%1dW", vBat/100, vBat%100, power_loss/10, power_loss%10);
+  u8g2.drawStr(72, 56, buffer);
+  //snprintf(buffer, sizeof(buffer), "PL:%1d.%1dW", power_loss/10, power_loss%10);
+  //u8g2.drawStr(72, 48, buffer);
+  snprintf(buffer, sizeof(buffer), "%s", message ? message : "________");
+  u8g2.drawStr(72, 48, buffer);
+
 
   u8g2.setFont(u8g2_font_ncenB10_tr);
   snprintf(buffer, sizeof(buffer), "%s", power_on ? "ON/-" : "-/OFF");
@@ -269,6 +280,8 @@ void measure() {
   mVrel = vout / 5.04;
   mArel = aout / 25.8;
 
+
+
   vBat = analogRead(BATTERY_ADC) * 0.2545; 
 }
 
@@ -291,14 +304,13 @@ void buttons_checking(){
   if(digitalRead(BUTTON1) == LOW){
     generate_pwm();
     power_on = true;
+    if(message) message = 0;
     blink();
   }
 
   if(digitalRead(BUTTON2) == LOW){
     but2_counter++;
-    analogWrite(CURRENT_PWM, 0);
-    analogWrite(VOLTAGE_PWM, 0);
-    power_on = false;
+    power_off();
     blink();
     if(but2_counter >= 5){
       low_power_mode();
@@ -317,6 +329,18 @@ void buttons_checking(){
   }
 }
 
+// In case of overvoltage on output, power off.
+void check_voltage(){
+  if(mVrel > (mVset*1.02)){
+    power_off();
+    message = "OVERVOLTAGE";
+  }
+  if(mArel > (mAset*1.05)){
+    power_off();
+    message = "OVERCURENT";
+  }
+}
+
 void loop(void) {
   static uint32_t drawscreen_millis, printing;
   //Main loop code start
@@ -324,6 +348,7 @@ void loop(void) {
   if(millis() >= drawscreen_millis + refresh_rate_ms){
     drawscreen_millis = millis();
     measure();
+    check_voltage();
     drawscreen();
   }
   if(millis() >= printing + 200){

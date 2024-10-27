@@ -29,12 +29,12 @@ ADS1115 ADS(0x48, &WireCustom);
 
 unsigned long totalTime = 0;
 int knob_rot = 0;
-int knob_debouncer = 0;
-int knob_butt_debouncer = 0;
+uint32_t knob_debouncer = 0;
+uint32_t knob_butt_debouncer = 0;
 int knob_butt = 0;
 int cursor = 0;
 int change_set = 0;
-int mVset = 2000;
+int mVset = 2700;
 int mAset = 100;
 int mVrel = 2000;
 int mArel = 25;
@@ -44,7 +44,27 @@ bool power_on = false;
 bool is_low_power_mode = false;
 uint16_t refresh_rate_ms = REFRESHRATEMS;
 const char* message;
+bool warning_state = false;
+int mode = 1;
+uint32_t mAh = 0;
+uint32_t mWh = 0;
+char message2[20];
+uint16_t osc[128];
+uint8_t osc_i;
+uint16_t osc_millis = 20;
 
+void warning(){
+  static bool blink_state;
+  if(warning_state){
+    if(blink_state){
+      digitalWrite(BACKLIGHT, LOW);
+      blink_state = false;
+    }else{
+      digitalWrite(BACKLIGHT, HIGH);
+      blink_state = true;
+    }
+  }
+}
 
 const char* getTimeStr() {
   static char timeStr[10];
@@ -228,13 +248,15 @@ void drawscreen(){
   u8g2.drawStr(72, 64, buffer);
   //snprintf(buffer, sizeof(buffer), "idle:%02d%%", get_free_cpu());
   //u8g2.drawStr(72, 56, buffer);
-  int power_loss = (((vBat*10)-mVrel)*mArel)/1E5;
+  int power_loss = (((vBat*10)-mVrel)*(mArel/10))/1E5;
   snprintf(buffer, sizeof(buffer), "%d.%02dV %1d.%1dW", vBat/100, vBat%100, power_loss/10, power_loss%10);
   u8g2.drawStr(72, 56, buffer);
   //snprintf(buffer, sizeof(buffer), "PL:%1d.%1dW", power_loss/10, power_loss%10);
   //u8g2.drawStr(72, 48, buffer);
-  snprintf(buffer, sizeof(buffer), "%s", message ? message : "________");
+  snprintf(buffer, sizeof(buffer), "%s", message ? message : "___________");
   u8g2.drawStr(72, 48, buffer);
+  snprintf(buffer, sizeof(buffer), "%s", message2);
+  u8g2.drawStr(72, 40, buffer);
 
 
   u8g2.setFont(u8g2_font_ncenB10_tr);
@@ -245,9 +267,13 @@ void drawscreen(){
   u8g2.setFont(u8g2_font_ncenB10_tr);
   snprintf(buffer, sizeof(buffer), "%04dmV", mVrel);
   u8g2.drawStr(0, 25, buffer);
-  snprintf(buffer, sizeof(buffer), "%04dmA", mArel);
+  snprintf(buffer, sizeof(buffer), "%03d.%dmA", mArel/10, mArel%10);
   u8g2.drawStr(0, 42, buffer);
-  snprintf(buffer, sizeof(buffer), "%04dmW", (mArel*mVrel)/1000);
+  if(mode == 1){
+    snprintf(buffer, sizeof(buffer), "%04dmW", (mArel/10*mVrel)/1000);
+  }else if(mode == 2){
+    snprintf(buffer, sizeof(buffer), "%04umWh", mWh / 1000);
+  }
   u8g2.drawStr(0, 59, buffer);
 
   //snprintf(buffer, sizeof(buffer), "%d, %d", knob_butt, knob_rot);
@@ -256,7 +282,26 @@ void drawscreen(){
   u8g2.sendBuffer();
 }
 
+void drawscreen2(){
+  char buffer [22];
+  u8g2.clearBuffer();		
+  static uint8_t prevY;
+  for (uint8_t x = 0 ; x < 128; x++) {
+    uint8_t y = 63 - (osc[x] / 10.0 / mAset * 64.0);
+    u8g2.drawLine(x, prevY, x, y);
+    //u8g2.drawPixel(x,y);
+    prevY = y;
+  }
+  u8g2.drawLine(osc_i, 0, osc_i, 64);
+  u8g2.setFont(u8g2_font_5x8_mr);
+  snprintf(buffer, sizeof(buffer), "%d%% %dmV %dmA %ums", get_free_cpu(), mVrel, mArel/10, osc_millis);
+  u8g2.drawStr(0, 7, buffer);
+  u8g2.sendBuffer();
+  
+}
+
 void measure() {
+  static uint32_t delta_ms;
   ADS.setDataRate(5);
   ADS.setGain(2);
   ADS.requestADC_Differential_2_3();
@@ -273,14 +318,17 @@ void measure() {
     idle();
   }  
   int16_t aout = ADS.getValue();
-
+  snprintf(message2, 20, "%d\0", aout); //debug
+  aout += 69; // Zero it, fix value
   if (aout < 0)
     aout = 0;
 
   mVrel = vout / 5.04;
-  mArel = aout / 25.8;
+  mArel = aout / 2.6;
 
-
+  mAh += mArel/10 * ((millis() - delta_ms) / 1000.0);
+  mWh += (mArel/10 * mVrel) * ((millis() - delta_ms) / 3600000.0 );
+  delta_ms = millis();
 
   vBat = analogRead(BATTERY_ADC) * 0.2545; 
 }
@@ -300,33 +348,46 @@ void low_power_mode(){
 }
 
 void buttons_checking(){
-  static int but2_counter;
+  static int but3_counter;
   if(digitalRead(BUTTON1) == LOW){
-    generate_pwm();
-    power_on = true;
+    if(power_on){
+      power_off();
+    }else{
+      generate_pwm();
+      power_on = true;
+    }
     if(message) message = 0;
     blink();
   }
 
   if(digitalRead(BUTTON2) == LOW){
-    but2_counter++;
-    power_off();
+    if(mode == 3){
+      osc_millis *= 2;
+      if(osc_millis > 1000) osc_millis = 20;
+
+    }else{
+      change_set++;
+      knob_butt=1;
+      cursor=1;
+      if(change_set>2) change_set = 0;
+    }
+
     blink();
-    if(but2_counter >= 5){
+  }
+
+  if(digitalRead(BUTTON3) == LOW){
+    mode++;
+    if(mode>3) mode = 1;
+    but3_counter++;
+    if(but3_counter >= 5){
       low_power_mode();
-      but2_counter = 0;
+      but3_counter = 0;
     }
   }else{
-    but2_counter=0;
+    but3_counter=0;
   }
   
-  if(digitalRead(BUTTON3) == LOW){
-    change_set++;
-    knob_butt=1;
-    cursor=1;
-    if(change_set>2)
-      change_set = 0;
-  }
+  
 }
 
 // In case of overvoltage on output, power off.
@@ -335,35 +396,61 @@ void check_voltage(){
     power_off();
     message = "OVERVOLTAGE";
   }
-  if(mArel > (mAset*1.05)){
+
+  if(mArel/10 > (mAset*1.05)){
     power_off();
-    message = "OVERCURENT";
+    message = "OVERCURRENT";
+  }
+
+ /* if(vBat < 610){
+    power_off();
+    digitalWrite(BACKLIGHT, LOW);
+    u8g2.setPowerSave(1);
+    HAL_PWR_EnterSTANDBYMode();
+  }else */if(vBat < 620){
+    power_off();
+    warning_state = true;
+    message = "LOW BAT!";
+  }else if(vBat < 660){
+    warning_state = true;
+  }else{
+    warning_state = false;
   }
 }
 
 void loop(void) {
-  static uint32_t drawscreen_millis, printing;
+  static uint32_t drawscreen_millis, twohundred_millis, oscilloscope_millis;
   //Main loop code start
   debounce();
   if(millis() >= drawscreen_millis + refresh_rate_ms){
     drawscreen_millis = millis();
     measure();
     check_voltage();
-    drawscreen();
+    if(mode == 3) drawscreen2();
+    else drawscreen();
   }
-  if(millis() >= printing + 200){
-    printing = millis();
+  if(millis() >= twohundred_millis + 200){
+    twohundred_millis = millis();
     buttons_checking();
+    warning();
   }
-  
+  if((mode == 3) && (millis() >= oscilloscope_millis + osc_millis)){
+    oscilloscope_millis = millis();
+    ADS.setGain(16);
+    int16_t aout = ADS.readADC(0) - 69;
+    if(aout < 0) aout = 0;
+    osc[osc_i++] = aout / 2.6;
+    if(osc_i>127) osc_i=0;
+  }
 
 
   //Main loop code end
-  idle();
+  idle(1);
 }
 
 
 extern "C" void HardFault_Handler(void) {
+  power_off();
   while(1){
     digitalWrite(PC13, LOW);
     delay(200);
@@ -372,6 +459,7 @@ extern "C" void HardFault_Handler(void) {
   }
 }
 extern "C" void MemManage_Handler(void) {
+  power_off();
   while(1){
     digitalWrite(PC13, LOW);
     delay(800);

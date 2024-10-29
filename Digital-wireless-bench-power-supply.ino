@@ -146,7 +146,22 @@ int get_free_cpu(){
   return ret; 
 }
 
+void setup_watchdog(){
+  // STMF103 Reference manual, Independent watchdog (IWDG), page 476/1096
+  IWDG->KR = 0x5555;  // Enable write access
+  IWDG->PR = 1;       // Set prescaler to 8
+  IWDG->RLR = 0xFFF;  // Set reload value for 819ms
+  IWDG->KR = 0xAAAA;  // Reaload
+  IWDG->KR = 0xCCCC;  // Start the watchdog
+}
+
+void reload_watchdog(){
+  IWDG->KR = 0xAAAA; 
+}
+
 void setup(void) {
+  setup_watchdog();
+
   pinMode(PC13, OUTPUT);
   digitalWrite(PC13, HIGH); //Boarde led off
 
@@ -443,6 +458,7 @@ void loop(void) {
 
 
   //Main loop code end
+  reload_watchdog();
   idle(1);
 }
 

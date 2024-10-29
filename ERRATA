@@ -1,0 +1,9 @@
+What's wrong with this design?
+-Using standby mode to limit current consumption cause voltage ripple and this cause current ripple seen under 10mA in constant current mode. So I resigned from stand by mode in idle().
+-Power supply does not like short circuit at voltage > 3.8V, voltage at Out- line goes up and through R19 in AIN3 pin of ADS current goes through internal protective diode to 3V3 power line. This create faulty readings.
+-Beacuse of working with small voltage at gorund level and cheap generic opamp is not easy to cailbrate this. ADS reads minus raw value around -65 to -73 at 0.0mA. There were also problems with having 0V,0mA at output instead 1.33V, changing ground wiring help. Regulator still produce 1.3V but mosfet is turn off. 
+-LM317 is not ldo so it need >2V overhead
+-Power loss should be smaller than ~7W.
+
+What's wrong with this software?
+-What's good? Its arudino sketch.

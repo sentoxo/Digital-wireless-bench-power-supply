@@ -51,7 +51,8 @@ uint32_t mWh = 0;
 char message2[20];
 uint16_t osc[128];
 uint8_t osc_i;
-uint16_t osc_millis = 20;
+uint16_t osc_millis = 16;
+uint8_t current_offset = 70;
 
 void warning(){
   static bool blink_state;
@@ -117,7 +118,7 @@ void blink(){
 }
 
 void generate_pwm(){
-  analogWrite(CURRENT_PWM, mAset*53.7);
+  analogWrite(CURRENT_PWM, mAset*53 + 40);
   analogWrite(VOLTAGE_PWM, (mVset-1250)*13.27);
 }
 
@@ -131,7 +132,8 @@ void idle(uint32_t ms = 1){
   uint32_t tim;
   tim = micros();
   for(; ms; ms--){
-    HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
+    //HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
+    delay(1);
   }
   idling += micros() - tim;
 }
@@ -230,6 +232,7 @@ void drawscreen(){
       mAset = MAXASET;
     else if(mAset < MINASET)
       mAset = MINASET;
+    if(power_on) generate_pwm();
   }
  
   if(cursor and blink){
@@ -255,8 +258,8 @@ void drawscreen(){
   //u8g2.drawStr(72, 48, buffer);
   snprintf(buffer, sizeof(buffer), "%s", message ? message : "___________");
   u8g2.drawStr(72, 48, buffer);
-  snprintf(buffer, sizeof(buffer), "%s", message2);
-  u8g2.drawStr(72, 40, buffer);
+  //snprintf(buffer, sizeof(buffer), "%s", message2);
+  //u8g2.drawStr(72, 40, buffer);
 
 
   u8g2.setFont(u8g2_font_ncenB10_tr);
@@ -272,7 +275,7 @@ void drawscreen(){
   if(mode == 1){
     snprintf(buffer, sizeof(buffer), "%04dmW", (mArel/10*mVrel)/1000);
   }else if(mode == 2){
-    snprintf(buffer, sizeof(buffer), "%04umWh", mWh / 1000);
+    snprintf(buffer, sizeof(buffer), "%04lumWh", mWh / 1000);
   }
   u8g2.drawStr(0, 59, buffer);
 
@@ -309,7 +312,8 @@ void measure() {
   while(ADS.isBusy()){
     idle();
   } 
-  uint16_t vout = ADS.getValue();
+  int16_t vout = ADS.getValue();
+  if(vout<0) vout=0;
 
   ADS.setGain(16);
   ADS.requestADC(0);
@@ -318,8 +322,8 @@ void measure() {
     idle();
   }  
   int16_t aout = ADS.getValue();
-  snprintf(message2, 20, "%d\0", aout); //debug
-  aout += 69; // Zero it, fix value
+  snprintf(message2, 20, "%d0", aout); //debug
+  aout += current_offset; // Zero it, fix value
   if (aout < 0)
     aout = 0;
 
@@ -363,7 +367,7 @@ void buttons_checking(){
   if(digitalRead(BUTTON2) == LOW){
     if(mode == 3){
       osc_millis *= 2;
-      if(osc_millis > 1000) osc_millis = 20;
+      if(osc_millis > 1000) osc_millis = 16;
 
     }else{
       change_set++;
@@ -371,7 +375,6 @@ void buttons_checking(){
       cursor=1;
       if(change_set>2) change_set = 0;
     }
-
     blink();
   }
 
@@ -397,21 +400,16 @@ void check_voltage(){
     message = "OVERVOLTAGE";
   }
 
-  if(mArel/10 > (mAset*1.05)){
+  if(mArel/10 > (mAset*1.5)){
     power_off();
     message = "OVERCURRENT";
   }
 
- /* if(vBat < 610){
-    power_off();
-    digitalWrite(BACKLIGHT, LOW);
-    u8g2.setPowerSave(1);
-    HAL_PWR_EnterSTANDBYMode();
-  }else */if(vBat < 620){
+  if(vBat < 610){
     power_off();
     warning_state = true;
     message = "LOW BAT!";
-  }else if(vBat < 660){
+  }else if(vBat < 630){
     warning_state = true;
   }else{
     warning_state = false;
@@ -437,7 +435,7 @@ void loop(void) {
   if((mode == 3) && (millis() >= oscilloscope_millis + osc_millis)){
     oscilloscope_millis = millis();
     ADS.setGain(16);
-    int16_t aout = ADS.readADC(0) - 69;
+    int16_t aout = ADS.readADC(0) + current_offset;
     if(aout < 0) aout = 0;
     osc[osc_i++] = aout / 2.6;
     if(osc_i>127) osc_i=0;
